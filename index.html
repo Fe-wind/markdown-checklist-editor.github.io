@@ -193,7 +193,12 @@
         // イベントハンドラー
         function handleTextChange(e) {
             state.markdownText = e.target.value;
-            updateMarkdown();
+            state.parsedItems = parseMarkdownToListItems(state.markdownText);
+            
+            const outputSection = document.getElementById('output-section');
+            if (outputSection) {
+                outputSection.innerHTML = renderOutputSection();
+            }
         }
 
         function handleCheckboxToggle(lineIndex, currentChecked) {
@@ -367,8 +372,8 @@
                     </header>
                     
                     <div class="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-8 min-h-0">
-                        <div class="h-full">${renderInputSection()}</div>
-                        <div class="h-full">${renderOutputSection()}</div>
+                        <div id="input-section" class="h-full">${renderInputSection()}</div>
+                        <div id="output-section" class="h-full">${renderOutputSection()}</div>
                     </div>
                 </div>
                 <div id="notification-container"></div>
