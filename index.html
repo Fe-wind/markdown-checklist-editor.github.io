@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>マークダウンチェックリストエディタ</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .animate-fadeInUp {
+            animation: fadeInUp 0.3s ease-out;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-indigo-500 via-purple-600 to-purple-700 min-h-screen">
+    <div id="root" class="min-h-screen p-8">
+        <!-- Content will be rendered here -->
+    </div>
+
+    <script>
+        // グローバル状態管理
+        const state = {
+            markdownText: '',
+            parsedItems: [],
+            currentFileName: 'checklist.md',
+            notification: null,
+            notificationTimeout: null
+        };
+
+        // 定数定義
+        const SAMPLE_MARKDOWN = `# プロジェクトチェックリスト
+
+## 準備フェーズ
+- [ ] プロジェクトの要件定義を完了する
+- [ ] チームメンバーの役割を明確にする
+- [ ] 開発環境をセットアップする
+- [ ] GitHubリポジトリを作成する
+
+## 開発フェーズ
+- [ ] 基本的な機能を実装する
+- [ ] ユーザーインターフェースをデザインする
+- [ ] データベーススキーマを設計する
+- [ ] APIエンドポイントを作成する
+
+## テストフェーズ
+- [ ] 単体テストを作成する
+- [ ] 統合テストを実施する
+- [ ] ユーザー受入れテストを行う
+- [ ] パフォーマンステストを実施する
+
+## デプロイフェーズ
+- [ ] 本番環境をセットアップする
+- [ ] CI/CDパイプラインを構築する
+- [ ] セキュリティ監査を実施する
+- [ ] ドキュメントを作成する
+
+---
+*最終更新日: ${new Date().toLocaleDateString('ja-JP')}*`;
+
+        // ユーティリティ関数
+        function parseMarkdownToListItems(markdown) {
+            const lines = markdown.split('\n');
+            const items = [];
+            let currentIndex = 0;
+
+            lines.forEach((line, lineIndex) => {
+                const trimmedLine = line.trim();
+                
+                if (trimmedLine.startsWith('#')) {
+                    const level = (line.match(/^#+/) || [''])[0].length;
+                    const text = line.replace(/^#+\s*/, '');
+                    items.push({
+                        type: 'header',
+                        level,
+                        text,
+                        lineIndex,
+                        index: currentIndex++
+                    });
+                } else if (trimmedLine.match(/^- \[[ x]\]/)) {
+                    const checked = trimmedLine.includes('- [x]');
+                    const text = trimmedLine.replace(/^- \[[ x]\]\s*/, '');
+                    items.push({
+                        type: 'task',
+                        checked,
+                        text,
+                        lineIndex,
+                        index: currentIndex++
+                    });
+                } else {
+                    items.push({
+                        type: 'other',
+                        text: line,
+                        lineIndex,
+                        index: currentIndex++
+                    });
+                }
+            });
+
+            return items;
+        }
+
+        function updateMarkdownString(markdown, lineIndex, newCheckedState) {
+            const lines = markdown.split('\n');
+            if (lineIndex >= 0 && lineIndex < lines.length) {
+                if (newCheckedState) {
+                    lines[lineIndex] = lines[lineIndex].replace('- [ ]', '- [x]');
+                } else {
+                    lines[lineIndex] = lines[lineIndex].replace('- [x]', '- [ ]');
+                }
+            }
+            return lines.join('\n');
+        }
+
+        // 通知関数
+        function showNotification(message, type = 'success') {
+            if (state.notificationTimeout) {
+                clearTimeout(state.notificationTimeout);
+            }
+
+            state.notification = { message, type };
+            renderNotification();
+
+            state.notificationTimeout = setTimeout(() => {
+                state.notification = null;
+                renderNotification();
+            }, 3000);
+        }
+
+        function renderNotification() {
+            const notificationContainer = document.getElementById('notification-container');
+            if (!notificationContainer) return;
+
+            if (!state.notification) {
+                notificationContainer.innerHTML = '';
+                return;
+            }
+
+            const { message, type } = state.notification;
+            const bgColor = type === 'success' ? 'bg-green-500' : 'bg-red-500';
+            const icon = type === 'success' ? '✓' : '✕';
+
+            notificationContainer.innerHTML = `
+                <div class="fixed top-4 right-4 ${bgColor} text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-2 animate-fadeInUp">
+                    <span class="text-xl">${icon}</span>
+                    <span>${message}</span>
+                </div>
+            `;
+        }
+
+        // ファイル処理関数
+        function handleFileUpload(file) {
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                state.markdownText = e.target.result;
+                state.currentFileName = file.name;
+                updateMarkdown();
+                showNotification(`ファイル「${file.name}」を読み込みました`);
+            };
+            reader.onerror = () => {
+                showNotification('ファイルの読み込みに失敗しました', 'error');
+            };
+            reader.readAsText(file);
+        }
+
+        function saveMarkdown() {
+            const blob = new Blob([state.markdownText], { type: 'text/markdown' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = state.currentFileName;
+            a.click();
+            URL.revokeObjectURL(url);
+            showNotification(`「${state.currentFileName}」を保存しました`);
+        }
+
+        // イベントハンドラー
+        function handleTextChange(e) {
+            state.markdownText = e.target.value;
+            updateMarkdown();
+        }
+
+        function handleCheckboxToggle(lineIndex, currentChecked) {
+            state.markdownText = updateMarkdownString(state.markdownText, lineIndex, !currentChecked);
+            updateMarkdown();
+        }
+
+        function handleLoadSample() {
+            state.markdownText = SAMPLE_MARKDOWN;
+            state.currentFileName = 'sample-checklist.md';
+            updateMarkdown();
+            showNotification('サンプルデータを読み込みました');
+        }
+
+        function handleClear() {
+            if (confirm('現在の内容をクリアしますか？')) {
+                state.markdownText = '';
+                state.currentFileName = 'checklist.md';
+                updateMarkdown();
+                showNotification('内容をクリアしました');
+            }
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.currentTarget.classList.add('border-indigo-500', 'bg-indigo-50');
+        }
+
+        function handleDragLeave(e) {
+            e.currentTarget.classList.remove('border-indigo-500', 'bg-indigo-50');
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            e.currentTarget.classList.remove('border-indigo-500', 'bg-indigo-50');
+            
+            const file = e.dataTransfer.files[0];
+            if (file && (file.type === 'text/markdown' || file.type === 'text/plain' || file.name.endsWith('.md'))) {
+                handleFileUpload(file);
+            } else {
+                showNotification('マークダウンファイル（.md）またはテキストファイル（.txt）を選択してください', 'error');
+            }
+        }
+
+        // 更新関数
+        function updateMarkdown() {
+            state.parsedItems = parseMarkdownToListItems(state.markdownText);
+            renderApp();
+        }
+
+        // レンダリング関数
+        function renderInputSection() {
+            return `
+                <div class="bg-white/95 backdrop-blur shadow-2xl rounded-2xl p-8 h-full flex flex-col">
+                    <h2 class="text-2xl font-bold mb-6 text-gray-800">マークダウン入力</h2>
+                    
+                    <div class="mb-4 flex flex-wrap gap-2">
+                        <button onclick="handleLoadSample()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors duration-200 flex items-center gap-2">
+                            <span>📄</span>
+                            <span>サンプルデータ</span>
+                        </button>
+                        <button onclick="saveMarkdown()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors duration-200 flex items-center gap-2">
+                            <span>💾</span>
+                            <span>保存</span>
+                        </button>
+                        <button onclick="handleClear()" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors duration-200 flex items-center gap-2">
+                            <span>🗑️</span>
+                            <span>クリア</span>
+                        </button>
+                    </div>
+
+                    <div 
+                        id="drop-zone"
+                        class="flex-1 border-2 border-dashed border-gray-300 rounded-xl p-4 transition-all duration-200"
+                        ondragover="handleDragOver(event)"
+                        ondragleave="handleDragLeave(event)"
+                        ondrop="handleDrop(event)"
+                    >
+                        <textarea
+                            id="markdown-input"
+                            class="w-full h-full p-4 font-mono text-sm resize-none outline-none bg-transparent"
+                            placeholder="ここにマークダウンを入力するか、ファイルをドラッグ＆ドロップしてください..."
+                            oninput="handleTextChange(event)"
+                        >${state.markdownText}</textarea>
+                    </div>
+
+                    <input
+                        type="file"
+                        id="file-input"
+                        accept=".md,.txt"
+                        class="hidden"
+                        onchange="handleFileUpload(event.target.files[0])"
+                    />
+                    <button 
+                        onclick="document.getElementById('file-input').click()"
+                        class="mt-4 w-full px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors duration-200"
+                    >
+                        ファイルを選択
+                    </button>
+                </div>
+            `;
+        }
+
+        function renderOutputSection() {
+            const taskItems = state.parsedItems.filter(item => item.type === 'task');
+            const checkedCount = taskItems.filter(item => item.checked).length;
+            const totalCount = taskItems.length;
+            const progress = totalCount > 0 ? (checkedCount / totalCount) * 100 : 0;
+
+            return `
+                <div class="bg-white/95 backdrop-blur shadow-2xl rounded-2xl p-8 h-full flex flex-col">
+                    <h2 class="text-2xl font-bold mb-6 text-gray-800">チェックリスト表示</h2>
+                    
+                    ${totalCount > 0 ? `
+                        <div class="mb-6">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="text-sm text-gray-600">進捗状況</span>
+                                <span class="text-sm font-medium text-gray-800">${checkedCount} / ${totalCount} 完了</span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                                <div 
+                                    class="h-full bg-gradient-to-r from-indigo-500 to-purple-600 transition-all duration-500 rounded-full"
+                                    style="width: ${progress}%"
+                                ></div>
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <div class="flex-1 overflow-y-auto space-y-2">
+                        ${state.parsedItems.map(item => renderItem(item)).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderItem(item) {
+            if (item.type === 'header') {
+                const fontSize = ['text-3xl', 'text-2xl', 'text-xl', 'text-lg', 'text-base', 'text-sm'][item.level - 1] || 'text-base';
+                const margin = item.level === 1 ? 'mt-6 mb-4' : 'mt-4 mb-2';
+                return `<h${item.level} class="${fontSize} font-bold text-gray-800 ${margin}">${item.text}</h${item.level}>`;
+            } else if (item.type === 'task') {
+                return `
+                    <div class="flex items-start p-3 rounded-lg hover:bg-gray-50 transition-colors duration-150 cursor-pointer group" onclick="handleCheckboxToggle(${item.lineIndex}, ${item.checked})">
+                        <input
+                            type="checkbox"
+                            ${item.checked ? 'checked' : ''}
+                            class="mt-1 w-5 h-5 text-indigo-600 rounded focus:ring-indigo-500 focus:ring-2 transition-all duration-200 cursor-pointer"
+                            onclick="handleCheckboxToggle(${item.lineIndex}, ${item.checked}); event.stopPropagation();"
+                        />
+                        <span class="ml-3 text-gray-700 ${item.checked ? 'line-through opacity-60' : ''} group-hover:text-gray-900 transition-all duration-200">
+                            ${item.text}
+                        </span>
+                    </div>
+                `;
+            } else if (item.text.trim()) {
+                if (item.text.trim() === '---') {
+                    return '<hr class="my-4 border-gray-300" />';
+                }
+                return `<p class="text-gray-600 py-1">${item.text}</p>`;
+            }
+            return '';
+        }
+
+        function renderApp() {
+            const root = document.getElementById('root');
+            root.innerHTML = `
+                <div class="container mx-auto flex flex-col h-full">
+                    <header class="text-center mb-8">
+                        <h1 class="text-4xl font-bold text-white mb-2">マークダウンチェックリストエディタ</h1>
+                        <p class="text-white/80">マークダウン形式でチェックリストを作成・編集できます</p>
+                    </header>
+                    
+                    <div class="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-8 min-h-0">
+                        <div class="h-full">${renderInputSection()}</div>
+                        <div class="h-full">${renderOutputSection()}</div>
+                    </div>
+                </div>
+                <div id="notification-container"></div>
+            `;
+        }
+
+        // 初期化
+        document.addEventListener('DOMContentLoaded', () => {
+            renderApp();
+        });
+    </script>
+</body>
+</html>
